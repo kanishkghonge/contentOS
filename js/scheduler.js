@@ -183,6 +183,60 @@ export async function recalculateFutureSchedule() {
 }
 
 /**
+ * Moves only missed, ready-to-post trial reels into the next available slots.
+ * Existing future plans stay where they are, so catching up never reshuffles
+ * content the doctor has already planned or filmed.
+ */
+export async function rescheduleMissedPosts() {
+  const profile = await db.getProfile();
+  const allReels = await db.getScheduledReels();
+  const todayStr = formatDateForInput(getSystemDate());
+  const maxPostsPerDay = profile.maxPostsPerDay || 1;
+  const postingDays = profile.postingDays || ['Mon', 'Wed', 'Fri'];
+  const enableFilming = profile.enableFilmingWorkflow === true;
+
+  const missedReels = allReels.filter((reel) => {
+    const isMissed = reel.scheduled_date < todayStr && reel.status === 'scheduled';
+    const isFilmed = enableFilming && (reel.status === 'filmed' || reel.is_filmed);
+    return isMissed && !reel.is_locked && !reel.is_main_reel && !isFilmed;
+  });
+
+  if (missedReels.length === 0) {
+    return { rescheduledCount: 0, totalMissed: 0 };
+  }
+
+  const fixedReels = allReels.filter((reel) => !missedReels.some((missed) => missed.id === reel.id));
+  const postsCountByDate = {};
+  fixedReels.forEach((reel) => {
+    if (reel.scheduled_date >= todayStr) {
+      postsCountByDate[reel.scheduled_date] = (postsCountByDate[reel.scheduled_date] || 0) + 1;
+    }
+  });
+
+  const candidateSlots = [];
+  const rawDates = getNextPostingDates(getSystemDate(), 365, postingDays);
+  for (const dateStr of rawDates) {
+    const openSlots = Math.max(0, maxPostsPerDay - (postsCountByDate[dateStr] || 0));
+    for (let slot = 0; slot < openSlots; slot++) candidateSlots.push(dateStr);
+    if (candidateSlots.length >= missedReels.length) break;
+  }
+
+  const rescheduledReels = balanceContentQueue(missedReels).map((reel, index) => {
+    const newDate = candidateSlots[index];
+    if (!newDate) return reel;
+    return {
+      ...reel,
+      scheduled_date: newDate,
+      updated_at: new Date().toISOString(),
+      rescheduled_at: new Date().toISOString()
+    };
+  });
+
+  await db.saveScheduledReels([...fixedReels, ...rescheduledReels]);
+  return { rescheduledCount: Math.min(candidateSlots.length, missedReels.length), totalMissed: missedReels.length };
+}
+
+/**
  * Creates a Trial Reel from an accepted script and triggers uniform sprinkle auto-scheduling.
  */
 export async function scheduleAcceptedScript(script) {

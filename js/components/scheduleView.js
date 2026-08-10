@@ -219,7 +219,7 @@ export const ScheduleView = {
                 </div>
                 
                 <span class="action-card-badge ${isPosted ? 'badge-green' : isFilmed ? 'badge-blue' : 'badge-amber'}">
-                  ${isPosted ? '✓ Posted' : isFilmed ? '✓ Filmed' : 'Scheduled'}
+                  ${isPosted ? '✓ Posted' : isFilmed ? '✓ Filmed' : 'Ready to post'}
                 </span>
               </div>
 

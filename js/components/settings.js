@@ -153,6 +153,15 @@ export const SettingsView = {
               </p>
             </div>
           </div>
+
+          <div class="form-group" style="margin-top: 12px;">
+            <label class="form-label" for="setting-missed-post-mode">When a post is missed</label>
+            <select id="setting-missed-post-mode" class="form-select">
+              <option value="manual" ${(profile.missedPostRescheduleMode || 'manual') === 'manual' ? 'selected' : ''}>Ask me — reschedule after I tap</option>
+              <option value="auto" ${profile.missedPostRescheduleMode === 'auto' ? 'selected' : ''}>Automatically reschedule when I open Today</option>
+            </select>
+            <p style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px;">Automatic mode only moves missed posts; it keeps your future plan and filmed reels in place.</p>
+          </div>
         </div>
 
         <!-- Time Travel Testing Card -->
@@ -295,6 +304,11 @@ export const SettingsView = {
       };
       await db.saveProfile(updated);
       showToast(enabled ? 'Filming status workflow enabled' : 'Filming workflow disabled (simplified mode)', 'info');
+    });
+
+    document.getElementById('setting-missed-post-mode')?.addEventListener('change', async (e) => {
+      await db.saveProfile({ ...profile, missedPostRescheduleMode: e.target.value });
+      showToast(e.target.value === 'auto' ? 'Missed posts will reschedule when you open Today.' : 'Missed posts will wait for your approval.', 'info');
     });
 
     // Time Travel +3 Days Button

@@ -5,7 +5,7 @@
 
 import { db } from '../db.js';
 import { formatDate, formatRelativeDate, formatDateForInput, showToast, getSystemDate } from '../utils.js';
-import { recalculateFutureSchedule } from '../scheduler.js';
+import { rescheduleMissedPosts } from '../scheduler.js';
 
 export const DashboardView = {
   async render(container, navigateTo, openModal) {
@@ -31,7 +31,7 @@ export const DashboardView = {
 
     // C. Posts That Were Missed (scheduled < today and unposted)
     const missedPosts = allReels.filter(
-      (r) => r.scheduled_date < todayStr && r.status === 'scheduled'
+      (r) => r.scheduled_date < todayStr && r.status === 'scheduled' && !r.is_locked && !r.is_main_reel
     );
 
     // D. Feedback Due (posted >= 3 days ago and no metrics logged yet)
@@ -173,12 +173,23 @@ export const DashboardView = {
             <span style="font-size: 12px; color: var(--accent-red); font-weight: 600;">${missedPosts.length} Missed</span>
           </div>
           <h3 class="action-card-title">Posts That Were Missed</h3>
-          <p class="action-card-desc">Life in clinic gets busy. 1-tap auto-reshuffle will redistribute these into your upcoming open slots without moving already filmed reels.</p>
+          <p class="action-card-desc">Life in clinic gets busy. Reschedule these into open upcoming slots, or skip any post you no longer want to publish.</p>
+          <div class="today-item-list">
+            ${missedPosts.map((post) => `
+              <div class="today-item">
+                <div class="today-item-info">
+                  <div class="today-item-title">${post.title}</div>
+                  <div class="today-item-meta">Was due ${formatDate(post.scheduled_date)}</div>
+                </div>
+                <button class="btn btn-sm btn-secondary btn-skip-missed" data-id="${post.id}">Skip</button>
+              </div>
+            `).join('')}
+          </div>
           <div class="action-card-footer">
             <span style="font-size: 12.5px; color: var(--text-secondary);">${missedPosts.length} posts can be rescheduled</span>
             <button class="btn btn-danger btn-sm" id="dash-btn-auto-reshuffle">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-              <span>Auto Reshuffle Schedule</span>
+              <span>Reschedule All</span>
             </button>
           </div>
         </div>
@@ -277,9 +288,26 @@ export const DashboardView = {
 
     // Auto Reshuffle button
     document.getElementById('dash-btn-auto-reshuffle')?.addEventListener('click', async () => {
-      await recalculateFutureSchedule();
-      showToast('Calendar auto-reshuffled and balanced!', 'success');
+      const result = await rescheduleMissedPosts();
+      showToast(
+        result.rescheduledCount > 0
+          ? `${result.rescheduledCount} missed post${result.rescheduledCount === 1 ? '' : 's'} rescheduled.`
+          : 'No missed posts could be rescheduled.',
+        result.rescheduledCount > 0 ? 'success' : 'info'
+      );
       DashboardView.render(container, navigateTo, openModal);
+    });
+
+    container.querySelectorAll('.btn-skip-missed').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        const reel = await db.getScheduledReel(e.currentTarget.dataset.id);
+        if (!reel) return;
+        reel.status = 'archived';
+        reel.skipped_at = new Date().toISOString();
+        await db.saveScheduledReel(reel);
+        showToast('Missed post skipped.', 'info');
+        DashboardView.render(container, navigateTo, openModal);
+      });
     });
 
     // Mark Filmed buttons

@@ -309,6 +309,7 @@
     maxPostsPerDay: 1,
     sprinkleStrategy: 'uniform',
     enableFilmingWorkflow: false,
+    missedPostRescheduleMode: 'manual',
     clinicName: 'Heart & Vascular Institute',
     website: 'drsarahchen.com',
     instagram: '@drsarahchen_md',
@@ -479,6 +480,7 @@
         maxPostsPerDay: 1,
         sprinkleStrategy: 'uniform',
         enableFilmingWorkflow: false,
+        missedPostRescheduleMode: 'manual',
         onboarded: true
       });
     },
@@ -751,6 +753,51 @@ DO NOT include markdown outside the json.
 
     await db.saveScheduledReels([...frozenReels, ...updatedReels]);
     return { updatedCount: updatedReels.length, totalReels: frozenReels.length + updatedReels.length };
+  }
+
+  async function rescheduleMissedPosts() {
+    const profile = await db.getProfile();
+    const allReels = await db.getScheduledReels();
+    const todayStr = formatDateForInput(getSystemDate());
+    const maxPostsPerDay = profile.maxPostsPerDay || 1;
+    const postingDays = profile.postingDays || ['Mon', 'Wed', 'Fri'];
+    const enableFilming = profile.enableFilmingWorkflow === true;
+
+    const missedReels = allReels.filter((reel) => {
+      const isMissed = reel.scheduled_date < todayStr && reel.status === 'scheduled';
+      const isFilmed = enableFilming && (reel.status === 'filmed' || reel.is_filmed);
+      return isMissed && !reel.is_locked && !reel.is_main_reel && !isFilmed;
+    });
+    if (missedReels.length === 0) return { rescheduledCount: 0, totalMissed: 0 };
+
+    const fixedReels = allReels.filter((reel) => !missedReels.some((missed) => missed.id === reel.id));
+    const postsCountByDate = {};
+    fixedReels.forEach((reel) => {
+      if (reel.scheduled_date >= todayStr) {
+        postsCountByDate[reel.scheduled_date] = (postsCountByDate[reel.scheduled_date] || 0) + 1;
+      }
+    });
+
+    const candidateSlots = [];
+    const rawDates = getNextPostingDates(getSystemDate(), 365, postingDays);
+    for (const dateStr of rawDates) {
+      const openSlots = Math.max(0, maxPostsPerDay - (postsCountByDate[dateStr] || 0));
+      for (let slot = 0; slot < openSlots; slot++) candidateSlots.push(dateStr);
+      if (candidateSlots.length >= missedReels.length) break;
+    }
+
+    const rescheduledReels = balanceContentQueue(missedReels).map((reel, index) => {
+      const newDate = candidateSlots[index];
+      if (!newDate) return reel;
+      return {
+        ...reel,
+        scheduled_date: newDate,
+        updated_at: new Date().toISOString(),
+        rescheduled_at: new Date().toISOString()
+      };
+    });
+    await db.saveScheduledReels([...fixedReels, ...rescheduledReels]);
+    return { rescheduledCount: Math.min(candidateSlots.length, missedReels.length), totalMissed: missedReels.length };
   }
 
   async function scheduleAcceptedScript(script) {
@@ -1134,7 +1181,7 @@ DO NOT include markdown outside the json.
 
       const todayPosts = allReels.filter((r) => r.scheduled_date === todayStr && r.status !== 'posted' && r.status !== 'archived');
       const filmingQueue = enableFilming ? allReels.filter((r) => r.status === 'scheduled' && !r.is_filmed).slice(0, 3) : [];
-      const missedPosts = allReels.filter((r) => r.scheduled_date < todayStr && r.status === 'scheduled');
+      const missedPosts = allReels.filter((r) => r.scheduled_date < todayStr && r.status === 'scheduled' && !r.is_locked && !r.is_main_reel);
       const feedbackDuePosts = allReels.filter((r) => {
         if (r.status !== 'posted' || r.is_main_reel_winner || r.feedback_logged) return false;
         const postDate = new Date(r.posted_date || r.scheduled_date);
@@ -1220,10 +1267,21 @@ DO NOT include markdown outside the json.
           <div class="action-card" style="border-left: 4px solid var(--accent-red);">
             <div class="action-card-header"><span class="action-card-badge badge-red">⚠️ Past Due</span><span style="font-size: 12px; color: var(--accent-red); font-weight: 600;">${missedPosts.length} Missed</span></div>
             <h3 class="action-card-title">Posts That Were Missed</h3>
-            <p class="action-card-desc">1-tap auto-reshuffle will redistribute these uniformly across your upcoming 2-week calendar.</p>
+            <p class="action-card-desc">Reschedule these into open upcoming slots, or skip any post you no longer want to publish.</p>
+            <div class="today-item-list">
+              ${missedPosts.map((post) => `
+                <div class="today-item">
+                  <div class="today-item-info">
+                    <div class="today-item-title">${post.title}</div>
+                    <div class="today-item-meta">Was due ${formatDate(post.scheduled_date)}</div>
+                  </div>
+                  <button class="btn btn-sm btn-secondary btn-skip-missed" data-id="${post.id}">Skip</button>
+                </div>
+              `).join('')}
+            </div>
             <div class="action-card-footer">
               <span style="font-size: 12.5px; color: var(--text-secondary);">${missedPosts.length} posts can be rescheduled</span>
-              <button class="btn btn-danger btn-sm" id="dash-btn-auto-reshuffle"><span>Auto Reshuffle Schedule</span></button>
+              <button class="btn btn-danger btn-sm" id="dash-btn-auto-reshuffle"><span>Reschedule All</span></button>
             </div>
           </div>
         `;
@@ -1264,9 +1322,21 @@ DO NOT include markdown outside the json.
       document.getElementById('dash-hero-quick-note')?.addEventListener('click', () => openModal('quickNote'));
       document.getElementById('dash-btn-start-review')?.addEventListener('click', () => navigateTo('review'));
       document.getElementById('dash-btn-auto-reshuffle')?.addEventListener('click', async () => {
-        await recalculateFutureSchedule();
-        showToast('Calendar auto-reshuffled and balanced!', 'success');
+        const result = await rescheduleMissedPosts();
+        showToast(result.rescheduledCount > 0 ? `${result.rescheduledCount} missed post${result.rescheduledCount === 1 ? '' : 's'} rescheduled.` : 'No missed posts could be rescheduled.', result.rescheduledCount > 0 ? 'success' : 'info');
         DashboardView.render(container, navigateTo, openModal);
+      });
+
+      container.querySelectorAll('.btn-skip-missed').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          const reel = await db.getScheduledReel(e.currentTarget.dataset.id);
+          if (!reel) return;
+          reel.status = 'archived';
+          reel.skipped_at = new Date().toISOString();
+          await db.saveScheduledReel(reel);
+          showToast('Missed post skipped.', 'info');
+          DashboardView.render(container, navigateTo, openModal);
+        });
       });
 
       container.querySelectorAll('.btn-mark-filmed').forEach((btn) => {
@@ -1543,7 +1613,7 @@ DO NOT include markdown outside the json.
                     <span class="action-card-badge ${isMain ? 'badge-purple' : 'badge-gray'}">${isMain ? '⭐ Main Reel' : 'Trial Reel'}</span>
                     <span style="font-size: 13px; font-weight: 600;">${escapeHtml(reel.format)}</span>
                   </div>
-                  <span class="action-card-badge ${isPosted ? 'badge-green' : isFilmed ? 'badge-blue' : 'badge-amber'}">${isPosted ? '✓ Posted' : isFilmed ? '✓ Filmed' : 'Scheduled'}</span>
+                  <span class="action-card-badge ${isPosted ? 'badge-green' : isFilmed ? 'badge-blue' : 'badge-amber'}">${isPosted ? '✓ Posted' : isFilmed ? '✓ Filmed' : 'Ready to post'}</span>
                 </div>
                 <h3 style="font-family: var(--font-heading); font-size: 16px; font-weight: 700;">${escapeHtml(reel.title)}</h3>
                 <div style="font-size: 13.5px; background: var(--bg-subtle); padding: 10px; border-radius: var(--radius-md); margin-bottom: 10px;">"${escapeHtml(reel.hook)}"</div>
@@ -2072,6 +2142,14 @@ DO NOT include markdown outside the json.
                 <p style="font-size: 12px; color: var(--text-tertiary);">Uncheck to keep workflow lightweight and go straight to posting.</p>
               </div>
             </div>
+            <div class="form-group" style="margin-top: 12px;">
+              <label class="form-label" for="setting-missed-post-mode">When a post is missed</label>
+              <select id="setting-missed-post-mode" class="form-select">
+                <option value="manual" ${(profile.missedPostRescheduleMode || 'manual') === 'manual' ? 'selected' : ''}>Ask me — reschedule after I tap</option>
+                <option value="auto" ${profile.missedPostRescheduleMode === 'auto' ? 'selected' : ''}>Automatically reschedule when I open Today</option>
+              </select>
+              <p style="font-size: 12px; color: var(--text-tertiary); margin-top: 4px;">Automatic mode only moves missed posts; it keeps your future plan and filmed reels in place.</p>
+            </div>
           </div>
 
           <div class="card" style="margin-top: 16px; border-left: 4px solid var(--accent-purple);">
@@ -2129,6 +2207,12 @@ DO NOT include markdown outside the json.
         profile.enableFilmingWorkflow = e.target.checked;
         await db.saveProfile(profile);
         showToast(e.target.checked ? 'Filming workflow enabled' : 'Filming workflow disabled', 'info');
+      });
+
+      document.getElementById('setting-missed-post-mode')?.addEventListener('change', async (e) => {
+        profile.missedPostRescheduleMode = e.target.value;
+        await db.saveProfile(profile);
+        showToast(e.target.value === 'auto' ? 'Missed posts will reschedule when you open Today.' : 'Missed posts will wait for your approval.', 'info');
       });
 
       document.getElementById('btn-test-time-travel')?.addEventListener('click', async () => {
@@ -2211,9 +2295,11 @@ DO NOT include markdown outside the json.
       });
 
       document.getElementById('bnav-fab-capture')?.addEventListener('click', () => this.openModal('insightCreate'));
-      document.getElementById('header-btn-timetravel')?.addEventListener('click', () => {
+      document.getElementById('header-btn-timetravel')?.addEventListener('click', async () => {
         const current = getTimeShiftDays();
         setTimeShiftDays(current + 3);
+        const profile = await db.getProfile();
+        if (profile.missedPostRescheduleMode === 'auto') await rescheduleMissedPosts();
         showToast('Fast-forwarded +3 days in system date! Check Feedback Due.', 'success');
         if (this.headerDate) this.headerDate.textContent = formatDate(getSystemDate());
         this.navigateTo(this.currentView);
@@ -2231,6 +2317,11 @@ DO NOT include markdown outside the json.
     async navigateTo(viewName) {
       this.currentView = viewName;
       window.location.hash = viewName;
+
+      if (viewName === 'dashboard') {
+        const profile = await db.getProfile();
+        if (profile.missedPostRescheduleMode === 'auto') await rescheduleMissedPosts();
+      }
 
       document.querySelectorAll('.nav-link, .bnav-item').forEach((el) => {
         el.classList.toggle('active', el.dataset.view === viewName);

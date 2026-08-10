@@ -15,6 +15,7 @@ import { TrialFeedbackModal } from './components/trialFeedback.js';
 import { FeedbackView } from './components/feedbackView.js';
 import { LibraryView } from './components/library.js';
 import { SettingsView } from './components/settings.js';
+import { rescheduleMissedPosts } from './scheduler.js';
 import { formatDate, getSystemDate, showToast, getTimeShiftDays, setTimeShiftDays } from './utils.js';
 
 class ContentOSApp {
@@ -71,9 +72,11 @@ class ContentOSApp {
     });
 
     // Header Quick Actions
-    document.getElementById('header-btn-timetravel')?.addEventListener('click', () => {
+    document.getElementById('header-btn-timetravel')?.addEventListener('click', async () => {
       const current = getTimeShiftDays();
       setTimeShiftDays(current + 3);
+      const profile = await db.getProfile();
+      if (profile.missedPostRescheduleMode === 'auto') await rescheduleMissedPosts();
       showToast('Fast-forwarded +3 days in system date! Check Feedback Due.', 'success');
       if (this.headerDate) {
         this.headerDate.textContent = formatDate(getSystemDate());
@@ -101,6 +104,11 @@ class ContentOSApp {
   async navigateTo(viewName) {
     this.currentView = viewName;
     window.location.hash = viewName;
+
+    if (viewName === 'dashboard') {
+      const profile = await db.getProfile();
+      if (profile.missedPostRescheduleMode === 'auto') await rescheduleMissedPosts();
+    }
 
     // Update active nav links (sidebar & mobile bottom nav)
     document.querySelectorAll('.nav-link, .bnav-item').forEach((el) => {

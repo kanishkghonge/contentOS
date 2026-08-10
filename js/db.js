@@ -98,6 +98,7 @@ export const defaultDoctorProfile = {
   maxPostsPerDay: 1, // Max posts per day limit
   sprinkleStrategy: 'uniform', // 'uniform' | 'front_loaded' | 'preferred_days'
   enableFilmingWorkflow: false, // Optional filming status workflow toggle
+  missedPostRescheduleMode: 'manual', // 'manual' | 'auto'
   clinicName: 'Heart & Vascular Institute',
   website: 'drsarahchen.com',
   instagram: '@drsarahchen_md',
