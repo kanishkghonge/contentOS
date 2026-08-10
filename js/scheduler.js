@@ -1,15 +1,15 @@
 /**
  * Content OS for Doctors — Intelligent Auto-Scheduler
  * Balances content formats and medical topics across calendar days.
- * Reshuffles ONLY future, unfilmed, unlocked Trial Reels.
+ * Uniformly sprinkles unposted scripts over 14 days (or doctor's configured window).
  */
 
 import { db } from './db.js';
 import { scriptFormats, getFormatById } from './formats.js';
-import { uuidv4, addDays, formatDateForInput } from './utils.js';
+import { uuidv4, addDays, formatDateForInput, getSystemDate } from './utils.js';
 
 /**
- * Returns an array of target posting dates starting from tomorrow or the next valid day,
+ * Returns an array of target posting dates starting from startDate,
  * matching the doctor's posting schedule (e.g. Mon/Wed/Fri or Daily).
  */
 export function getNextPostingDates(startDate, count, postingDays = ['Mon', 'Wed', 'Fri']) {
@@ -22,13 +22,13 @@ export function getNextPostingDates(startDate, count, postingDays = ['Mon', 'Wed
 
   let safetyCount = 0;
   while (dates.length < count && safetyCount < 365) {
-    safetyCount++;
-    current.setDate(current.getDate() + 1);
     const dayName = dayNames[current.getDay()];
 
     if (allowAllDays || postingDays.includes(dayName)) {
       dates.push(formatDateForInput(current));
     }
+    current.setDate(current.getDate() + 1);
+    safetyCount++;
   }
 
   return dates;
@@ -43,7 +43,7 @@ export function balanceContentQueue(items) {
   const remaining = [...items];
   const balanced = [];
 
-  // Pick first item (prefer strong format like Patient Story or Talking Head)
+  // Pick first item
   balanced.push(remaining.shift());
 
   while (remaining.length > 0) {
@@ -80,28 +80,43 @@ export function balanceContentQueue(items) {
 }
 
 /**
- * Core Auto-Scheduling Routine
- * - Preserves all filmed, posted, locked, or past reels.
- * - Collects all future unfilmed trial reels + newly accepted scripts.
- * - Balances the queue and re-assigns future calendar dates.
+ * Core Uniform Sprinkle Auto-Scheduling Routine
+ * - Preserves posted, filmed (if enabled), locked, or past reels.
+ * - Uniformly distributes all unposted, unlocked trial reels over the sprinkle window (default 14 days).
+ * - Enforces max posts per day limit.
  */
 export async function recalculateFutureSchedule() {
   const profile = await db.getProfile();
   const allReels = await db.getScheduledReels();
-  const todayStr = formatDateForInput(new Date());
+  const todayStr = formatDateForInput(getSystemDate());
+
+  const sprinkleWindowDays = profile.sprinkleWindowDays || 14;
+  const maxPostsPerDay = profile.maxPostsPerDay || 1;
+  const postingDays = profile.postingDays || ['Mon', 'Wed', 'Fri'];
+  const strategy = profile.sprinkleStrategy || 'uniform';
+  const enableFilming = profile.enableFilmingWorkflow === true;
 
   // 1. Separate FROZEN reels from MUTABLE reels
-  // Frozen: already posted, filmed, locked, or date <= today
+  // Frozen: already posted, strictly past date (< todayStr), locked, or filmed (if filming enabled)
   const frozenReels = allReels.filter((reel) => {
-    const isPastOrToday = reel.scheduled_date <= todayStr;
-    const isFilmedOrPosted = reel.status === 'filmed' || reel.status === 'posted';
+    const isPast = reel.scheduled_date < todayStr;
+    const isPosted = reel.status === 'posted';
+    const isFilmed = enableFilming && (reel.status === 'filmed' || reel.is_filmed);
     const isLocked = reel.is_locked === true;
     const isMainReel = reel.is_main_reel === true;
 
-    return isPastOrToday || isFilmedOrPosted || isLocked || isMainReel;
+    return isPast || isPosted || isFilmed || isLocked || isMainReel;
   });
 
-  // Mutable reels: future, unfilmed, unlocked trial reels
+  // Count how many frozen posts exist on each date
+  const postsCountByDate = {};
+  frozenReels.forEach((r) => {
+    if (r.scheduled_date) {
+      postsCountByDate[r.scheduled_date] = (postsCountByDate[r.scheduled_date] || 0) + 1;
+    }
+  });
+
+  // Mutable reels: unposted, unlocked, non-filmed reels on or after today
   const mutableReels = allReels.filter((reel) => {
     return !frozenReels.some((f) => f.id === reel.id);
   });
@@ -110,33 +125,50 @@ export async function recalculateFutureSchedule() {
     return { updatedCount: 0, totalReels: allReels.length };
   }
 
-  // 2. Extract locked dates so the scheduler doesn't collide
-  const reservedDates = new Set(frozenReels.map((r) => r.scheduled_date));
-
-  // 3. Balance the mutable queue (interleave formats & topics)
+  // 2. Interleave formats & topics for variety
   const balancedQueue = balanceContentQueue(mutableReels);
 
-  // 4. Generate next posting dates skipping reserved dates
-  const postingDays = profile.postingDays || ['Mon', 'Wed', 'Fri'];
-  const futureDates = [];
-  let runnerDate = new Date();
+  // 3. Generate candidate open dates for the sprinkle window
+  const candidateDates = [];
+  let runnerDate = getSystemDate();
+  const rawDates = getNextPostingDates(runnerDate, sprinkleWindowDays * 2, postingDays);
 
-  while (futureDates.length < balancedQueue.length) {
-    const nextCandidates = getNextPostingDates(runnerDate, 5, postingDays);
-    for (const cand of nextCandidates) {
-      if (!reservedDates.has(cand) && !futureDates.includes(cand)) {
-        futureDates.push(cand);
-        if (futureDates.length === balancedQueue.length) break;
-      }
+  for (const dateStr of rawDates) {
+    const existingCount = postsCountByDate[dateStr] || 0;
+    if (existingCount < maxPostsPerDay) {
+      candidateDates.push(dateStr);
     }
-    runnerDate = new Date(nextCandidates[nextCandidates.length - 1]);
+    if (candidateDates.length >= Math.max(sprinkleWindowDays, balancedQueue.length * 3)) {
+      break;
+    }
   }
 
-  // 5. Assign updated dates to the balanced queue
+  // 4. Uniformly space posts across candidate dates
+  const assignedDates = [];
+  const totalPosts = balancedQueue.length;
+
+  if (strategy === 'front_loaded' || totalPosts === 1 || candidateDates.length <= totalPosts) {
+    // Fill first available open slots
+    for (let i = 0; i < totalPosts; i++) {
+      assignedDates.push(candidateDates[i] || candidateDates[candidateDates.length - 1]);
+    }
+  } else {
+    // True UNIFORM SPRINKLE: Spreads totalPosts evenly across candidateDates over 2 weeks
+    const maxIndex = Math.min(candidateDates.length - 1, sprinkleWindowDays - 1);
+    const step = maxIndex / Math.max(1, totalPosts - 1 || 1);
+
+    for (let i = 0; i < totalPosts; i++) {
+      let targetIdx = Math.round(i * step);
+      if (targetIdx > maxIndex) targetIdx = maxIndex;
+      assignedDates.push(candidateDates[targetIdx]);
+    }
+  }
+
+  // 5. Assign calculated dates to the balanced queue
   const updatedReels = balancedQueue.map((reel, idx) => {
     return {
       ...reel,
-      scheduled_date: futureDates[idx] || reel.scheduled_date,
+      scheduled_date: assignedDates[idx] || reel.scheduled_date || todayStr,
       updated_at: new Date().toISOString()
     };
   });
@@ -151,7 +183,7 @@ export async function recalculateFutureSchedule() {
 }
 
 /**
- * Creates a Trial Reel from an accepted script and triggers auto-scheduling.
+ * Creates a Trial Reel from an accepted script and triggers uniform sprinkle auto-scheduling.
  */
 export async function scheduleAcceptedScript(script) {
   const existingReels = await db.getScheduledReels();
@@ -161,7 +193,7 @@ export async function scheduleAcceptedScript(script) {
     return duplicate;
   }
 
-  const todayStr = formatDateForInput(new Date());
+  const todayStr = formatDateForInput(getSystemDate());
 
   const newReel = {
     id: uuidv4(),
@@ -173,8 +205,8 @@ export async function scheduleAcceptedScript(script) {
     script: script.script,
     cta: script.cta,
     estimated_duration: script.estimated_duration || '45s',
-    scheduled_date: todayStr, // Temporary, will be positioned by recalculate
-    status: 'scheduled', // 'scheduled' | 'filmed' | 'posted' | 'winner' | 'archived'
+    scheduled_date: todayStr, // Will be uniformly positioned by recalculateFutureSchedule
+    status: 'scheduled',
     is_locked: false,
     is_main_reel: false,
     created_at: new Date().toISOString(),
@@ -195,7 +227,7 @@ export async function promoteToMainReel(trialReelId) {
   if (!reel) throw new Error('Reel not found');
 
   const profile = await db.getProfile();
-  const nextDates = getNextPostingDates(new Date(), 8, profile.postingDays || ['Mon', 'Wed', 'Fri']);
+  const nextDates = getNextPostingDates(getSystemDate(), 8, profile.postingDays || ['Mon', 'Wed', 'Fri']);
   // Place Main Reel 5-7 days out into prime slot
   const mainReelDate = nextDates[2] || nextDates[0];
 

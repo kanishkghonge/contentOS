@@ -7,15 +7,16 @@
 import { db } from '../db.js';
 import { getFormatById } from '../formats.js';
 import { recalculateFutureSchedule } from '../scheduler.js';
-import { formatDate, formatFullDate, formatDateForInput, showToast, escapeHtml } from '../utils.js';
+import { formatDate, formatFullDate, formatDateForInput, showToast, escapeHtml, getSystemDate } from '../utils.js';
 
 export const ScheduleView = {
-  currentMonthDate: new Date(), // Active calendar month
-  viewMode: 'calendar', // 'calendar' | 'list'
+  currentMonthDate: getSystemDate(), // Active calendar month
 
   async render(container, navigateTo, openModal) {
+    const profile = await db.getProfile();
+    const enableFilming = profile.enableFilmingWorkflow === true;
     const allReels = await db.getScheduledReels();
-    const todayStr = formatDateForInput(new Date());
+    const todayStr = formatDateForInput(getSystemDate());
 
     // Map scheduled reels by date
     const reelsByDate = {};
@@ -44,14 +45,14 @@ export const ScheduleView = {
               Publishing Calendar
             </h2>
             <p style="font-size: 13px; color: var(--text-secondary); margin-top: 2px;">
-              Auto-balanced across clinical formats. Click any day cell to view full post details & actions.
+              Uniformly sprinkled across ${profile.sprinkleWindowDays || 14} days. Click any cell to view post details.
             </p>
           </div>
 
           <div class="flex gap-2">
             <button class="btn btn-secondary btn-sm" id="btn-recalculate-schedule">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-              <span>Auto Reshuffle Future</span>
+              <span>Re-Sprinkle Schedule</span>
             </button>
           </div>
         </div>
@@ -111,7 +112,7 @@ export const ScheduleView = {
               const formatMeta = getFormatById(r.format);
               const isMain = r.is_main_reel;
               const isPosted = r.status === 'posted';
-              const isFilmed = r.status === 'filmed' || r.is_filmed;
+              const isFilmed = enableFilming && (r.status === 'filmed' || r.is_filmed);
 
               let badgeBg = 'background: var(--bg-subtle); color: var(--text-primary);';
               if (isMain) badgeBg = 'background: var(--accent-purple-subtle); color: var(--accent-purple); border: 1px solid var(--accent-purple);';
@@ -154,21 +155,21 @@ export const ScheduleView = {
     // Auto Reshuffle Future
     document.getElementById('btn-recalculate-schedule')?.addEventListener('click', async () => {
       const res = await recalculateFutureSchedule();
-      showToast(`Reshuffled ${res.updatedCount} future trial reels without moving filmed posts.`, 'success');
+      showToast(`Uniformly re-sprinkled ${res.updatedCount} future trial reels over 2 weeks!`, 'success');
       ScheduleView.render(container, navigateTo, openModal);
     });
 
     // CLICK DAY CELL -> OPEN DAY DETAIL MODAL
     container.querySelectorAll('.cal-day-cell').forEach((cell) => {
-      cell.addEventListener('click', (e) => {
+      cell.addEventListener('click', async (e) => {
         const dateStr = e.currentTarget.dataset.date;
         const reelsOnDate = reelsByDate[dateStr] || [];
-        this.openDayDetailModal(dateStr, reelsOnDate, navigateTo, openModal);
+        this.openDayDetailModal(dateStr, reelsOnDate, navigateTo, openModal, enableFilming);
       });
     });
   },
 
-  openDayDetailModal(dateStr, reels, navigateTo, openModal) {
+  openDayDetailModal(dateStr, reels, navigateTo, openModal, enableFilming = false) {
     const modalOverlay = document.getElementById('modal-overlay');
     const modalBody = document.getElementById('modal-body');
     const modalTitle = document.getElementById('modal-title');
@@ -199,7 +200,7 @@ export const ScheduleView = {
       <div class="flex flex-col gap-3">
         ${reels.map((reel) => {
           const formatMeta = getFormatById(reel.format);
-          const isFilmed = reel.status === 'filmed' || reel.is_filmed;
+          const isFilmed = enableFilming && (reel.status === 'filmed' || reel.is_filmed);
           const isPosted = reel.status === 'posted';
           const isMain = reel.is_main_reel;
           const isLocked = reel.is_locked;
@@ -252,7 +253,7 @@ export const ScheduleView = {
 
                 <div class="flex gap-2">
                   ${
-                    !isFilmed && !isPosted
+                    enableFilming && !isFilmed && !isPosted
                       ? `<button class="btn btn-secondary btn-sm btn-detail-film" data-id="${reel.id}">Mark Filmed</button>`
                       : ''
                   }

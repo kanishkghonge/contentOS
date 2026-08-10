@@ -4,13 +4,15 @@
  */
 
 import { db } from '../db.js';
-import { formatDate, formatRelativeDate, formatDateForInput, showToast } from '../utils.js';
+import { formatDate, formatRelativeDate, formatDateForInput, showToast, getSystemDate } from '../utils.js';
 import { recalculateFutureSchedule } from '../scheduler.js';
 
 export const DashboardView = {
   async render(container, navigateTo, openModal) {
     const profile = await db.getProfile();
-    const todayStr = formatDateForInput(new Date());
+    const systemDate = getSystemDate();
+    const todayStr = formatDateForInput(systemDate);
+    const enableFilming = profile.enableFilmingWorkflow === true;
 
     // 1. Gather actionable items
     const allReels = await db.getScheduledReels();
@@ -22,10 +24,10 @@ export const DashboardView = {
       (r) => r.scheduled_date === todayStr && r.status !== 'posted' && r.status !== 'archived'
     );
 
-    // B. Trial Reels Not Yet Shot (Filming queue)
-    const filmingQueue = allReels.filter(
-      (r) => r.status === 'scheduled' && !r.is_filmed
-    ).slice(0, 3);
+    // B. Trial Reels Not Yet Shot (Filming queue - shown only if filming workflow is enabled)
+    const filmingQueue = enableFilming
+      ? allReels.filter((r) => r.status === 'scheduled' && !r.is_filmed).slice(0, 3)
+      : [];
 
     // C. Posts That Were Missed (scheduled < today and unposted)
     const missedPosts = allReels.filter(
@@ -36,8 +38,7 @@ export const DashboardView = {
     const feedbackDuePosts = allReels.filter((r) => {
       if (r.status !== 'posted' || r.is_main_reel_winner || r.feedback_logged) return false;
       const postDate = new Date(r.posted_date || r.scheduled_date);
-      const now = new Date();
-      const diffDays = Math.floor((now - postDate) / (1000 * 60 * 60 * 24));
+      const diffDays = Math.floor((systemDate - postDate) / (1000 * 60 * 60 * 24));
       return diffDays >= 3;
     });
 
@@ -93,9 +94,13 @@ export const DashboardView = {
                   </div>
                 </div>
                 <div class="flex gap-2">
-                  <button class="btn btn-sm btn-secondary btn-mark-filmed" data-id="${post.id}">
-                    ${post.status === 'filmed' ? '✓ Filmed' : 'Mark Filmed'}
-                  </button>
+                  ${
+                    enableFilming
+                      ? `<button class="btn btn-sm btn-secondary btn-mark-filmed" data-id="${post.id}">
+                          ${post.status === 'filmed' ? '✓ Filmed' : 'Mark Filmed'}
+                        </button>`
+                      : ''
+                  }
                   <button class="btn btn-sm btn-primary btn-mark-posted" data-id="${post.id}">
                     Mark as Posted
                   </button>

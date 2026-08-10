@@ -12,9 +12,10 @@ import { AIImportModal } from './components/aiImport.js';
 import { ScriptReviewView } from './components/scriptReview.js';
 import { ScheduleView } from './components/scheduleView.js';
 import { TrialFeedbackModal } from './components/trialFeedback.js';
+import { FeedbackView } from './components/feedbackView.js';
 import { LibraryView } from './components/library.js';
 import { SettingsView } from './components/settings.js';
-import { formatDate } from './utils.js';
+import { formatDate, getSystemDate, showToast, getTimeShiftDays, setTimeShiftDays } from './utils.js';
 
 class ContentOSApp {
   constructor() {
@@ -41,7 +42,7 @@ class ContentOSApp {
 
     // 2. Set dynamic header date
     if (this.headerDate) {
-      this.headerDate.textContent = formatDate(new Date());
+      this.headerDate.textContent = formatDate(getSystemDate());
     }
 
     // 3. Setup Navigation & Routing
@@ -70,6 +71,17 @@ class ContentOSApp {
     });
 
     // Header Quick Actions
+    document.getElementById('header-btn-timetravel')?.addEventListener('click', () => {
+      const current = getTimeShiftDays();
+      setTimeShiftDays(current + 3);
+      showToast('Fast-forwarded +3 days in system date! Check Feedback Due.', 'success');
+      if (this.headerDate) {
+        this.headerDate.textContent = formatDate(getSystemDate());
+      }
+      this.navigateTo(this.currentView);
+      this.updateBadges();
+    });
+
     document.getElementById('header-btn-note')?.addEventListener('click', () => {
       this.openModal('quickNote');
     });
@@ -118,14 +130,7 @@ class ContentOSApp {
     } else if (viewName === 'schedule') {
       await ScheduleView.render(this.viewContainer, this.navigateTo.bind(this), this.openModal.bind(this));
     } else if (viewName === 'feedback') {
-      // Direct view of reels needing feedback
-      const allReels = await db.getScheduledReels();
-      const feedbackDue = allReels.find((r) => r.status === 'posted' && !r.feedback_logged);
-      if (feedbackDue) {
-        this.openModal('trialFeedback', { reelId: feedbackDue.id });
-      } else {
-        await DashboardView.render(this.viewContainer, this.navigateTo.bind(this), this.openModal.bind(this));
-      }
+      await FeedbackView.render(this.viewContainer, this.navigateTo.bind(this), this.openModal.bind(this));
     } else if (viewName === 'notes') {
       await NotesView.render(this.viewContainer, this.navigateTo.bind(this), this.openModal.bind(this));
     } else if (viewName === 'library') {
@@ -221,9 +226,10 @@ class ContentOSApp {
     }
 
     // Feedback badge (posted >= 3 days ago)
+    const systemDate = getSystemDate();
     const feedbackDueCount = allReels.filter((r) => {
       if (r.status !== 'posted' || r.feedback_logged) return false;
-      const diff = Math.floor((new Date() - new Date(r.posted_date || r.scheduled_date)) / (1000 * 60 * 60 * 24));
+      const diff = Math.floor((systemDate - new Date(r.posted_date || r.scheduled_date)) / (1000 * 60 * 60 * 24));
       return diff >= 3;
     }).length;
 

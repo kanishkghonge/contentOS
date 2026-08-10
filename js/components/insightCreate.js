@@ -42,6 +42,19 @@ export const InsightCreateModal = {
           </div>
 
           <div class="form-group">
+            <label class="form-label" for="insight-cta">What CTA do you want to have in the video?</label>
+            <input 
+              type="text" 
+              id="insight-cta" 
+              class="form-input" 
+              placeholder="Leave empty for default: Check caption for more" 
+            />
+            <p style="font-size: 11.5px; color: var(--text-tertiary); margin-top: 3px;">
+              If left blank, automatically defaults to "Check caption for more"
+            </p>
+          </div>
+
+          <div class="form-group">
             <label class="form-label" for="insight-references">Optional References / Real Patient Context</label>
             <input 
               type="text" 
@@ -115,9 +128,12 @@ export const InsightCreateModal = {
       e.preventDefault();
       const title = document.getElementById('insight-title').value.trim();
       const details = document.getElementById('insight-details').value.trim();
+      const ctaVal = document.getElementById('insight-cta').value.trim();
       const references = document.getElementById('insight-references').value.trim();
 
       if (!title || !details) return;
+
+      const custom_cta = ctaVal || 'Check caption for more';
 
       activeInsightId = uuidv4();
       const newInsight = {
@@ -125,6 +141,7 @@ export const InsightCreateModal = {
         title,
         description: details.substring(0, 140) + '...',
         supporting_points: details,
+        custom_cta,
         references,
         status: 'active',
         created_at: new Date().toISOString()

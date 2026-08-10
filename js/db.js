@@ -94,11 +94,16 @@ export const defaultDoctorProfile = {
   cta: 'both', // 'caption' | 'comment' | 'both'
   reelLength: '45-60s',
   postingDays: ['Mon', 'Wed', 'Fri'], // Posting schedule
+  sprinkleWindowDays: 14, // Uniform 2-week scheduling window by default
+  maxPostsPerDay: 1, // Max posts per day limit
+  sprinkleStrategy: 'uniform', // 'uniform' | 'front_loaded' | 'preferred_days'
+  enableFilmingWorkflow: false, // Optional filming status workflow toggle
   clinicName: 'Heart & Vascular Institute',
   website: 'drsarahchen.com',
   instagram: '@drsarahchen_md',
   onboarded: true
 };
+
 
 export const db = {
   // PROFILE

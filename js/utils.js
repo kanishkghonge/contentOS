@@ -169,3 +169,24 @@ export function truncateText(str, maxLen = 80) {
   if (str.length <= maxLen) return str;
   return str.substring(0, maxLen).trim() + '...';
 }
+
+// Simulated Time Travel Helpers (Testing)
+let systemTimeOffsetDays = parseInt(localStorage.getItem('doctor_os_time_offset_days') || '0', 10);
+
+export function getSystemDate() {
+  const d = new Date();
+  if (systemTimeOffsetDays !== 0) {
+    d.setDate(d.getDate() + systemTimeOffsetDays);
+  }
+  return d;
+}
+
+export function getTimeShiftDays() {
+  return systemTimeOffsetDays;
+}
+
+export function setTimeShiftDays(days) {
+  systemTimeOffsetDays = days;
+  localStorage.setItem('doctor_os_time_offset_days', String(days));
+}
+
