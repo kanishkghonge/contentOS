@@ -436,7 +436,7 @@
     },
     async exportFullDatabase() {
       return {
-        appName: 'Content OS for Doctors',
+        appName: 'Content Mate',
         exportedAt: new Date().toISOString(),
         version: 1,
         profile: await this.getProfile(),

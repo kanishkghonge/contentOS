@@ -318,7 +318,7 @@ export const db = {
     const scheduledReels = await this.getScheduledReels();
 
     return {
-      appName: 'Content OS for Doctors',
+      appName: 'Content Mate',
       exportedAt: new Date().toISOString(),
       version: 1,
       profile,
