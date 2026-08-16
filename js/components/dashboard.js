@@ -30,8 +30,10 @@ export const DashboardView = {
       : [];
 
     // C. Posts That Were Missed (scheduled < today and unposted)
+    // Anything scheduled in the past but not published must be surfaced—even
+    // if it has been filmed—so it cannot quietly disappear from the workflow.
     const missedPosts = allReels.filter(
-      (r) => r.scheduled_date < todayStr && r.status === 'scheduled' && !r.is_locked && !r.is_main_reel
+      (r) => r.scheduled_date < todayStr && r.status !== 'posted' && r.status !== 'archived' && r.status !== 'winner'
     );
 
     // D. Feedback Due (posted >= 3 days ago and no metrics logged yet)
@@ -181,7 +183,11 @@ export const DashboardView = {
                   <div class="today-item-title">${post.title}</div>
                   <div class="today-item-meta">Was due ${formatDate(post.scheduled_date)}</div>
                 </div>
-                <button class="btn btn-sm btn-secondary btn-skip-missed" data-id="${post.id}">Skip</button>
+                <div class="flex gap-2" style="flex-wrap: wrap; justify-content: flex-end;">
+                  <input class="form-input missed-date-input" data-id="${post.id}" type="date" min="${todayStr}" value="${todayStr}" aria-label="New post date" style="width: 142px; padding: 6px 8px; font-size: 12px;" />
+                  <button class="btn btn-sm btn-primary btn-reschedule-missed-date" data-id="${post.id}">Reschedule</button>
+                  <button class="btn btn-sm btn-secondary btn-skip-missed" data-id="${post.id}">Skip</button>
+                </div>
               </div>
             `).join('')}
           </div>
@@ -189,7 +195,7 @@ export const DashboardView = {
             <span style="font-size: 12.5px; color: var(--text-secondary);">${missedPosts.length} posts can be rescheduled</span>
             <button class="btn btn-danger btn-sm" id="dash-btn-auto-reshuffle">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-              <span>Reschedule All</span>
+              <span>Auto-Sprinkle All</span>
             </button>
           </div>
         </div>
@@ -220,6 +226,9 @@ export const DashboardView = {
                 </div>
                 <button class="btn btn-sm btn-secondary btn-mark-filmed" data-id="${post.id}">
                   Mark Shot
+                </button>
+                <button class="btn btn-sm btn-ghost btn-copy-script" data-id="${post.id}">
+                  Copy Script
                 </button>
               </div>
             `).join('')}
@@ -307,6 +316,49 @@ export const DashboardView = {
         await db.saveScheduledReel(reel);
         showToast('Missed post skipped.', 'info');
         DashboardView.render(container, navigateTo, openModal);
+      });
+    });
+
+    container.querySelectorAll('.btn-reschedule-missed-date').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        const id = e.currentTarget.dataset.id;
+        const dateInput = container.querySelector(`.missed-date-input[data-id="${id}"]`);
+        const newDate = dateInput?.value;
+        if (!newDate || newDate < todayStr) {
+          showToast('Choose today or a future date.', 'error');
+          return;
+        }
+        const reel = await db.getScheduledReel(id);
+        if (!reel) return;
+        reel.scheduled_date = newDate;
+        reel.rescheduled_at = new Date().toISOString();
+        reel.updated_at = new Date().toISOString();
+        await db.saveScheduledReel(reel);
+        showToast(`Rescheduled for ${formatDate(newDate)}.`, 'success');
+        DashboardView.render(container, navigateTo, openModal);
+      });
+    });
+
+    container.querySelectorAll('.btn-copy-script').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        const reel = await db.getScheduledReel(e.currentTarget.dataset.id);
+        if (!reel?.script) {
+          showToast('There is no script to copy for this post.', 'info');
+          return;
+        }
+        try {
+          await navigator.clipboard.writeText(reel.script);
+        } catch {
+          const textarea = document.createElement('textarea');
+          textarea.value = reel.script;
+          textarea.style.position = 'fixed';
+          textarea.style.opacity = '0';
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand('copy');
+          textarea.remove();
+        }
+        showToast('Script copied to clipboard.', 'success');
       });
     });
 

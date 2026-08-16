@@ -120,7 +120,7 @@ export const ScheduleView = {
               else if (isFilmed) badgeBg = 'background: var(--accent-blue-subtle); color: var(--accent-blue);';
 
               return `
-                <div style="font-size: 10.5px; font-weight: 600; padding: 2px 4px; border-radius: var(--radius-xs); ${badgeBg} white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; items-center; gap: 3px;" title="${escapeHtml(r.title)}">
+                <div class="cal-reel-card" draggable="true" data-reel-id="${r.id}" style="font-size: 10.5px; font-weight: 600; padding: 2px 4px; border-radius: var(--radius-xs); ${badgeBg} white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; items-center; gap: 3px; cursor: grab;" title="Drag to another date: ${escapeHtml(r.title)}">
                   <span>${formatMeta.icon || '💡'}</span>
                   <span>${isMain ? '⭐ ' : ''}${escapeHtml(r.title)}</span>
                 </div>
@@ -165,6 +165,42 @@ export const ScheduleView = {
         const dateStr = e.currentTarget.dataset.date;
         const reelsOnDate = reelsByDate[dateStr] || [];
         this.openDayDetailModal(dateStr, reelsOnDate, navigateTo, openModal, enableFilming);
+      });
+    });
+
+    // Drag a scheduled item directly to another calendar day.
+    container.querySelectorAll('.cal-reel-card').forEach((card) => {
+      card.addEventListener('dragstart', (e) => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', e.currentTarget.dataset.reelId);
+      });
+    });
+
+    container.querySelectorAll('.cal-day-cell').forEach((cell) => {
+      cell.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+      });
+      cell.addEventListener('drop', async (e) => {
+        e.preventDefault();
+        const reelId = e.dataTransfer.getData('text/plain');
+        const newDate = e.currentTarget.dataset.date;
+        const reel = await db.getScheduledReel(reelId);
+        if (!reel || reel.scheduled_date === newDate) return;
+        if (newDate < todayStr) {
+          showToast('Posts can only be moved to today or a future date.', 'error');
+          return;
+        }
+        if (reel.status === 'posted' || reel.is_locked) {
+          showToast(reel.is_locked ? 'Unpin this date before moving the post.' : 'Posted items cannot be rescheduled.', 'info');
+          return;
+        }
+        reel.scheduled_date = newDate;
+        reel.rescheduled_at = new Date().toISOString();
+        reel.updated_at = new Date().toISOString();
+        await db.saveScheduledReel(reel);
+        showToast(`Moved to ${formatDate(newDate)}.`, 'success');
+        ScheduleView.render(container, navigateTo, openModal);
       });
     });
   },
@@ -245,6 +281,17 @@ export const ScheduleView = {
                 CTA: ${escapeHtml(reel.cta)}
               </div>
 
+              ${
+                !isPosted
+                  ? `<div class="flex gap-2 items-center" style="margin-bottom: 12px; flex-wrap: wrap;">
+                      <label style="font-size: 12px; color: var(--text-secondary); font-weight: 600;">Reschedule
+                        <input class="form-input detail-reschedule-date" data-id="${reel.id}" type="date" min="${formatDateForInput(getSystemDate())}" value="${reel.scheduled_date}" style="width: 150px; margin-left: 5px; padding: 6px 8px; font-size: 12px;" />
+                      </label>
+                      <button class="btn btn-secondary btn-sm btn-detail-reschedule" data-id="${reel.id}">Set Date</button>
+                    </div>`
+                  : ''
+              }
+
               <!-- Quick Action Controls -->
               <div class="flex gap-2 justify-between items-center" style="border-top: 1px solid var(--border-subtle); padding-top: 10px;">
                 <button class="btn btn-ghost btn-sm btn-detail-lock" data-id="${reel.id}">
@@ -323,6 +370,32 @@ export const ScheduleView = {
           modalOverlay.classList.add('hidden');
           ScheduleView.render(document.getElementById('view-container'), navigateTo, openModal);
         }
+      });
+    });
+
+    modalBody.querySelectorAll('.btn-detail-reschedule').forEach((btn) => {
+      btn.addEventListener('click', async (e) => {
+        const id = e.currentTarget.dataset.id;
+        const dateInput = modalBody.querySelector(`.detail-reschedule-date[data-id="${id}"]`);
+        const newDate = dateInput?.value;
+        const today = formatDateForInput(getSystemDate());
+        if (!newDate || newDate < today) {
+          showToast('Choose today or a future date.', 'error');
+          return;
+        }
+        const reel = await db.getScheduledReel(id);
+        if (!reel || reel.status === 'posted') return;
+        if (reel.is_locked) {
+          showToast('Unpin this date before rescheduling.', 'info');
+          return;
+        }
+        reel.scheduled_date = newDate;
+        reel.rescheduled_at = new Date().toISOString();
+        reel.updated_at = new Date().toISOString();
+        await db.saveScheduledReel(reel);
+        showToast(`Rescheduled for ${formatDate(newDate)}.`, 'success');
+        modalOverlay.classList.add('hidden');
+        ScheduleView.render(document.getElementById('view-container'), navigateTo, openModal);
       });
     });
   }

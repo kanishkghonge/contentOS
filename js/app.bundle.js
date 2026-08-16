@@ -503,9 +503,13 @@
     const reelLength = profile.reelLength || '45-60s';
 
     const formatsList = scriptFormats.map((f, i) => `${i + 1}. **${f.name}** (${f.category}): ${f.promptInstruction}`).join('\n');
+    const customInstructions = profile.customPromptInstructions
+      ? `\n=======================================================\nCUSTOM DOCTOR INSTRUCTIONS (FOLLOW THESE IN ADDITION TO THE RULES BELOW)\n=======================================================\n${profile.customPromptInstructions.trim()}\n`
+      : '';
 
     return `You are an elite medical copywriter and clinical retention strategist for world-class doctor creators.
 Your mission is to transform a doctor's raw clinical insight into a high-retention social media content pack that STOP SKIPPING, TRIGGERS IMMENSE CURIOSITY, and GOES DEEP into medical reality.
+${customInstructions}
 
 =======================================================
 1. DOCTOR PROFILE & COMMUNICATION PREFERENCES
@@ -713,13 +717,14 @@ DO NOT include markdown outside the json.
 
     const balancedQueue = balanceContentQueue(mutableReels);
 
+    // Each free daily capacity is an individual candidate slot.
     const candidateDates = [];
-    let runnerDate = getSystemDate();
-    const rawDates = getNextPostingDates(runnerDate, sprinkleWindowDays * 2, postingDays);
+    const rawDates = getNextPostingDates(getSystemDate(), Math.max(sprinkleWindowDays * 3, balancedQueue.length * 2), postingDays);
 
     for (const dateStr of rawDates) {
       const existingCount = postsCountByDate[dateStr] || 0;
-      if (existingCount < maxPostsPerDay) {
+      const openSlots = Math.max(0, maxPostsPerDay - existingCount);
+      for (let slot = 0; slot < openSlots; slot++) {
         candidateDates.push(dateStr);
       }
       if (candidateDates.length >= Math.max(sprinkleWindowDays, balancedQueue.length * 3)) {
@@ -735,7 +740,7 @@ DO NOT include markdown outside the json.
         assignedDates.push(candidateDates[i] || candidateDates[candidateDates.length - 1]);
       }
     } else {
-      const maxIndex = Math.min(candidateDates.length - 1, sprinkleWindowDays - 1);
+      const maxIndex = candidateDates.length - 1;
       const step = maxIndex / Math.max(1, totalPosts - 1 || 1);
 
       for (let i = 0; i < totalPosts; i++) {
@@ -1181,7 +1186,7 @@ DO NOT include markdown outside the json.
 
       const todayPosts = allReels.filter((r) => r.scheduled_date === todayStr && r.status !== 'posted' && r.status !== 'archived');
       const filmingQueue = enableFilming ? allReels.filter((r) => r.status === 'scheduled' && !r.is_filmed).slice(0, 3) : [];
-      const missedPosts = allReels.filter((r) => r.scheduled_date < todayStr && r.status === 'scheduled' && !r.is_locked && !r.is_main_reel);
+      const missedPosts = allReels.filter((r) => r.scheduled_date < todayStr && r.status !== 'posted' && r.status !== 'archived' && r.status !== 'winner');
       const feedbackDuePosts = allReels.filter((r) => {
         if (r.status !== 'posted' || r.is_main_reel_winner || r.feedback_logged) return false;
         const postDate = new Date(r.posted_date || r.scheduled_date);
@@ -1275,13 +1280,17 @@ DO NOT include markdown outside the json.
                     <div class="today-item-title">${post.title}</div>
                     <div class="today-item-meta">Was due ${formatDate(post.scheduled_date)}</div>
                   </div>
-                  <button class="btn btn-sm btn-secondary btn-skip-missed" data-id="${post.id}">Skip</button>
+                  <div class="flex gap-2" style="flex-wrap: wrap; justify-content: flex-end;">
+                    <input class="form-input missed-date-input" data-id="${post.id}" type="date" min="${todayStr}" value="${todayStr}" aria-label="New post date" style="width: 142px; padding: 6px 8px; font-size: 12px;" />
+                    <button class="btn btn-sm btn-primary btn-reschedule-missed-date" data-id="${post.id}">Reschedule</button>
+                    <button class="btn btn-sm btn-secondary btn-skip-missed" data-id="${post.id}">Skip</button>
+                  </div>
                 </div>
               `).join('')}
             </div>
             <div class="action-card-footer">
               <span style="font-size: 12.5px; color: var(--text-secondary);">${missedPosts.length} posts can be rescheduled</span>
-              <button class="btn btn-danger btn-sm" id="dash-btn-auto-reshuffle"><span>Reschedule All</span></button>
+              <button class="btn btn-danger btn-sm" id="dash-btn-auto-reshuffle"><span>Auto-Sprinkle All</span></button>
             </div>
           </div>
         `;
@@ -1296,7 +1305,7 @@ DO NOT include markdown outside the json.
               ${filmingQueue.map((post) => `
                 <div class="today-item">
                   <div class="today-item-info"><div class="today-item-title">${post.title}</div></div>
-                  <button class="btn btn-sm btn-secondary btn-mark-filmed" data-id="${post.id}">Mark Shot</button>
+                  <div class="flex gap-2"><button class="btn btn-sm btn-secondary btn-mark-filmed" data-id="${post.id}">Mark Shot</button><button class="btn btn-sm btn-ghost btn-copy-script" data-id="${post.id}">Copy Script</button></div>
                 </div>
               `).join('')}
             </div>
@@ -1336,6 +1345,42 @@ DO NOT include markdown outside the json.
           await db.saveScheduledReel(reel);
           showToast('Missed post skipped.', 'info');
           DashboardView.render(container, navigateTo, openModal);
+        });
+      });
+
+      container.querySelectorAll('.btn-reschedule-missed-date').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.currentTarget.dataset.id;
+          const newDate = container.querySelector(`.missed-date-input[data-id="${id}"]`)?.value;
+          if (!newDate || newDate < todayStr) return showToast('Choose today or a future date.', 'error');
+          const reel = await db.getScheduledReel(id);
+          if (!reel) return;
+          reel.scheduled_date = newDate;
+          reel.rescheduled_at = new Date().toISOString();
+          reel.updated_at = new Date().toISOString();
+          await db.saveScheduledReel(reel);
+          showToast(`Rescheduled for ${formatDate(newDate)}.`, 'success');
+          DashboardView.render(container, navigateTo, openModal);
+        });
+      });
+
+      container.querySelectorAll('.btn-copy-script').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          const reel = await db.getScheduledReel(e.currentTarget.dataset.id);
+          if (!reel?.script) return showToast('There is no script to copy for this post.', 'info');
+          try {
+            await navigator.clipboard.writeText(reel.script);
+          } catch {
+            const textarea = document.createElement('textarea');
+            textarea.value = reel.script;
+            textarea.style.position = 'fixed';
+            textarea.style.opacity = '0';
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            textarea.remove();
+          }
+          showToast('Script copied to clipboard.', 'success');
         });
       });
 
@@ -1534,7 +1579,7 @@ DO NOT include markdown outside the json.
                 else if (isFilmed) badgeBg = 'background: var(--accent-blue-subtle); color: var(--accent-blue);';
 
                 return `
-                  <div style="font-size: 10.5px; font-weight: 600; padding: 2px 4px; border-radius: var(--radius-xs); ${badgeBg} white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; items-center; gap: 3px;">
+                  <div class="cal-reel-card" draggable="true" data-reel-id="${r.id}" style="font-size: 10.5px; font-weight: 600; padding: 2px 4px; border-radius: var(--radius-xs); ${badgeBg} white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: flex; items-center; gap: 3px; cursor: grab;" title="Drag to another date: ${escapeHtml(r.title)}">
                     <span>${formatMeta.icon || '💡'}</span>
                     <span>${isMain ? '⭐ ' : ''}${escapeHtml(r.title)}</span>
                   </div>
@@ -1570,6 +1615,34 @@ DO NOT include markdown outside the json.
           const dateStr = e.currentTarget.dataset.date;
           const reelsOnDate = reelsByDate[dateStr] || [];
           this.openDayDetailModal(dateStr, reelsOnDate, navigateTo, openModal, enableFilming);
+        });
+      });
+
+      container.querySelectorAll('.cal-reel-card').forEach((card) => {
+        card.addEventListener('dragstart', (e) => {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/plain', e.currentTarget.dataset.reelId);
+        });
+      });
+      container.querySelectorAll('.cal-day-cell').forEach((cell) => {
+        cell.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+        });
+        cell.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          const reelId = e.dataTransfer.getData('text/plain');
+          const newDate = e.currentTarget.dataset.date;
+          const reel = await db.getScheduledReel(reelId);
+          if (!reel || reel.scheduled_date === newDate) return;
+          if (newDate < todayStr) return showToast('Posts can only be moved to today or a future date.', 'error');
+          if (reel.status === 'posted' || reel.is_locked) return showToast(reel.is_locked ? 'Unpin this date before moving the post.' : 'Posted items cannot be rescheduled.', 'info');
+          reel.scheduled_date = newDate;
+          reel.rescheduled_at = new Date().toISOString();
+          reel.updated_at = new Date().toISOString();
+          await db.saveScheduledReel(reel);
+          showToast(`Moved to ${formatDate(newDate)}.`, 'success');
+          ScheduleView.render(container, navigateTo, openModal);
         });
       });
     },
@@ -1618,6 +1691,7 @@ DO NOT include markdown outside the json.
                 <h3 style="font-family: var(--font-heading); font-size: 16px; font-weight: 700;">${escapeHtml(reel.title)}</h3>
                 <div style="font-size: 13.5px; background: var(--bg-subtle); padding: 10px; border-radius: var(--radius-md); margin-bottom: 10px;">"${escapeHtml(reel.hook)}"</div>
                 <div style="font-size: 12.5px; font-weight: 600; color: var(--accent-blue); margin-bottom: 12px;">CTA: ${escapeHtml(reel.cta)}</div>
+                ${!isPosted ? `<div class="flex gap-2 items-center" style="margin-bottom: 12px; flex-wrap: wrap;"><label style="font-size: 12px; color: var(--text-secondary); font-weight: 600;">Reschedule <input class="form-input detail-reschedule-date" data-id="${reel.id}" type="date" min="${formatDateForInput(getSystemDate())}" value="${reel.scheduled_date}" style="width: 150px; margin-left: 5px; padding: 6px 8px; font-size: 12px;" /></label><button class="btn btn-secondary btn-sm btn-detail-reschedule" data-id="${reel.id}">Set Date</button></div>` : ''}
                 <div class="flex gap-2 justify-between items-center" style="border-top: 1px solid var(--border-subtle); padding-top: 10px;">
                   <button class="btn btn-ghost btn-sm btn-detail-lock" data-id="${reel.id}">${isLocked ? '🔒 Unpin Date' : '📌 Pin Date'}</button>
                   <div class="flex gap-2">
@@ -1682,6 +1756,25 @@ DO NOT include markdown outside the json.
             modalOverlay.classList.add('hidden');
             ScheduleView.render(document.getElementById('view-container'), navigateTo, openModal);
           }
+        });
+      });
+
+      modalBody.querySelectorAll('.btn-detail-reschedule').forEach((btn) => {
+        btn.addEventListener('click', async (e) => {
+          const id = e.currentTarget.dataset.id;
+          const newDate = modalBody.querySelector(`.detail-reschedule-date[data-id="${id}"]`)?.value;
+          const today = formatDateForInput(getSystemDate());
+          if (!newDate || newDate < today) return showToast('Choose today or a future date.', 'error');
+          const reel = await db.getScheduledReel(id);
+          if (!reel || reel.status === 'posted') return;
+          if (reel.is_locked) return showToast('Unpin this date before rescheduling.', 'info');
+          reel.scheduled_date = newDate;
+          reel.rescheduled_at = new Date().toISOString();
+          reel.updated_at = new Date().toISOString();
+          await db.saveScheduledReel(reel);
+          showToast(`Rescheduled for ${formatDate(newDate)}.`, 'success');
+          modalOverlay.classList.add('hidden');
+          ScheduleView.render(document.getElementById('view-container'), navigateTo, openModal);
         });
       });
     }
@@ -2105,6 +2198,14 @@ DO NOT include markdown outside the json.
           </form>
 
           <div class="card" style="margin-top: 16px;">
+            <h3 style="font-family: var(--font-heading); font-size: 16px; font-weight: 700; margin-bottom: 4px;">AI Script Generation Prompt</h3>
+            <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">Add standing instructions for every generated prompt. They are saved in your profile and included in backups.</p>
+            <label class="form-label" for="setting-custom-prompt">Custom prompt instructions</label>
+            <textarea id="setting-custom-prompt" class="form-textarea" rows="7" placeholder="e.g. Use Indian clinical context and include a short safety note.">${escapeHtml(profile.customPromptInstructions || '')}</textarea>
+            <button class="btn btn-primary btn-sm" id="btn-save-custom-prompt" style="margin-top: 12px;">Save Prompt Instructions</button>
+          </div>
+
+          <div class="card" style="margin-top: 16px;">
             <h3 style="font-family: var(--font-heading); font-size: 16px; font-weight: 700; margin-bottom: 4px;">🗓️ Sprinkle & Scheduling Engine Settings</h3>
             <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 14px;">Approved scripts are uniformly spaced across your 2-week calendar.</p>
             
@@ -2167,7 +2268,9 @@ DO NOT include markdown outside the json.
           <div class="card" style="margin-top: 16px;">
             <h3 style="font-family: var(--font-heading); font-size: 16px; font-weight: 700; margin-bottom: 6px;">Local-First Backup</h3>
             <div class="flex gap-2" style="flex-wrap: wrap;">
-              <button class="btn btn-secondary btn-sm" id="btn-export-json">Export Backup JSON</button>
+              <button class="btn btn-secondary btn-sm" id="btn-export-json">Export Backup</button>
+              <button class="btn btn-secondary btn-sm" id="btn-import-json-trigger">Import Backup</button>
+              <input type="file" id="input-file-backup" accept=".json,application/json" class="hidden" />
               <button class="btn btn-secondary btn-sm" id="btn-load-demo-settings">Load Cardiology Demo</button>
             </div>
           </div>
@@ -2198,7 +2301,16 @@ DO NOT include markdown outside the json.
         showToast('Sprinkle settings saved & schedule re-spaced!', 'success');
       });
 
+      document.getElementById('btn-save-custom-prompt')?.addEventListener('click', async () => {
+        profile.customPromptInstructions = document.getElementById('setting-custom-prompt').value.trim();
+        await db.saveProfile(profile);
+        showToast('Prompt instructions saved and will be included in backups.', 'success');
+      });
+
       document.getElementById('btn-resprinkle-now')?.addEventListener('click', async () => {
+        profile.sprinkleWindowDays = parseInt(document.getElementById('setting-sprinkle-window').value, 10);
+        profile.maxPostsPerDay = parseInt(document.getElementById('setting-max-posts').value, 10);
+        await db.saveProfile(profile);
         const res = await recalculateFutureSchedule();
         showToast(`Uniformly re-sprinkled ${res.updatedCount} future reels across ${profile.sprinkleWindowDays || 14} days!`, 'success');
       });
@@ -2237,6 +2349,22 @@ DO NOT include markdown outside the json.
         a.download = `doctor-content-os-backup.json`;
         a.click();
         URL.revokeObjectURL(url);
+      });
+
+      document.getElementById('btn-import-json-trigger')?.addEventListener('click', () => {
+        document.getElementById('input-file-backup')?.click();
+      });
+
+      document.getElementById('input-file-backup')?.addEventListener('change', async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+          await db.importFullDatabase(JSON.parse(await file.text()));
+          showToast('Workspace restored from backup.', 'success');
+          navigateTo('dashboard');
+        } catch (err) {
+          showToast(`Restore failed: ${err.message}`, 'error');
+        }
       });
 
       document.getElementById('btn-load-demo-settings')?.addEventListener('click', async () => {

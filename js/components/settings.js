@@ -90,6 +90,22 @@ export const SettingsView = {
           </div>
         </form>
 
+        <div class="card" style="margin-top: 16px;">
+          <h3 style="font-family: var(--font-heading); font-size: 16px; font-weight: 700; margin-bottom: 4px; color: var(--text-primary);">
+            AI Script Generation Prompt
+          </h3>
+          <p style="font-size: 13px; color: var(--text-secondary); margin-bottom: 12px;">
+            Add standing instructions for every generated prompt—for example, required disclaimers, a writing style, or formats to avoid. These are saved in your profile and included in backups.
+          </p>
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" for="setting-custom-prompt">Custom prompt instructions</label>
+            <textarea id="setting-custom-prompt" class="form-textarea" rows="7" placeholder="e.g. Keep the language simple, use Indian clinical context, and always include a short safety note.">${escapeHtml(profile.customPromptInstructions || '')}</textarea>
+          </div>
+          <div style="margin-top: 12px;">
+            <button class="btn btn-primary btn-sm" id="btn-save-custom-prompt">Save Prompt Instructions</button>
+          </div>
+        </div>
+
         <!-- Sprinkle Mechanics Customization Card -->
         <div class="card" style="margin-top: 16px;">
           <h3 style="font-family: var(--font-heading); font-size: 16px; font-weight: 700; margin-bottom: 4px; color: var(--text-primary);">
@@ -289,10 +305,25 @@ export const SettingsView = {
       showToast('Sprinkle settings saved & schedule re-spaced!', 'success');
     });
 
+    document.getElementById('btn-save-custom-prompt')?.addEventListener('click', async () => {
+      const customPromptInstructions = document.getElementById('setting-custom-prompt').value.trim();
+      await db.saveProfile({ ...profile, customPromptInstructions });
+      showToast('Prompt instructions saved and will be included in backups.', 'success');
+    });
+
     // Re-Sprinkle Now Button
     document.getElementById('btn-resprinkle-now')?.addEventListener('click', async () => {
+      // Save visible settings before recalculating so this action never uses
+      // stale profile values.
+      const updatedProfile = {
+        ...profile,
+        sprinkleWindowDays: parseInt(document.getElementById('setting-sprinkle-window').value, 10),
+        maxPostsPerDay: parseInt(document.getElementById('setting-max-posts').value, 10),
+        sprinkleStrategy: document.getElementById('setting-sprinkle-strategy').value
+      };
+      await db.saveProfile(updatedProfile);
       const res = await recalculateFutureSchedule();
-      showToast(`Uniformly re-sprinkled ${res.updatedCount} future reels across ${profile.sprinkleWindowDays || 14} days!`, 'success');
+      showToast(`Uniformly re-sprinkled ${res.updatedCount} future reels across ${updatedProfile.sprinkleWindowDays || 14} days!`, 'success');
     });
 
     // Toggle Filming Workflow Checkbox

@@ -25,8 +25,13 @@ export function buildDoctorPrompt(profile, insight) {
     return `${i + 1}. **${f.name}** (${f.category}): ${f.promptInstruction}`;
   }).join('\n');
 
+  const customInstructions = profile.customPromptInstructions
+    ? `\n=======================================================\nCUSTOM DOCTOR INSTRUCTIONS (FOLLOW THESE IN ADDITION TO THE RULES BELOW)\n=======================================================\n${profile.customPromptInstructions.trim()}\n`
+    : '';
+
   return `You are an elite medical copywriter and clinical retention strategist for world-class doctor creators.
 Your mission is to transform a doctor's raw clinical insight into a high-retention social media content pack that STOP SKIPPING, TRIGGERS IMMENSE CURIOSITY, and GOES DEEP into medical reality.
+${customInstructions}
 
 =======================================================
 1. DOCTOR PROFILE & COMMUNICATION PREFERENCES

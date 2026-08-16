@@ -129,13 +129,15 @@ export async function recalculateFutureSchedule() {
   const balancedQueue = balanceContentQueue(mutableReels);
 
   // 3. Generate candidate open dates for the sprinkle window
+  // Represent every available post slot, not just every available day. This is
+  // essential when the doctor allows more than one post per day.
   const candidateDates = [];
-  let runnerDate = getSystemDate();
-  const rawDates = getNextPostingDates(runnerDate, sprinkleWindowDays * 2, postingDays);
+  const rawDates = getNextPostingDates(getSystemDate(), Math.max(sprinkleWindowDays * 3, balancedQueue.length * 2), postingDays);
 
   for (const dateStr of rawDates) {
     const existingCount = postsCountByDate[dateStr] || 0;
-    if (existingCount < maxPostsPerDay) {
+    const openSlots = Math.max(0, maxPostsPerDay - existingCount);
+    for (let slot = 0; slot < openSlots; slot++) {
       candidateDates.push(dateStr);
     }
     if (candidateDates.length >= Math.max(sprinkleWindowDays, balancedQueue.length * 3)) {
@@ -154,7 +156,8 @@ export async function recalculateFutureSchedule() {
     }
   } else {
     // True UNIFORM SPRINKLE: Spreads totalPosts evenly across candidateDates over 2 weeks
-    const maxIndex = Math.min(candidateDates.length - 1, sprinkleWindowDays - 1);
+    // Repeated dates only occur when that day genuinely has remaining capacity.
+    const maxIndex = candidateDates.length - 1;
     const step = maxIndex / Math.max(1, totalPosts - 1 || 1);
 
     for (let i = 0; i < totalPosts; i++) {
